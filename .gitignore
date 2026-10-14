@@ -2,3 +2,4 @@ build/
 *.o
 *.d
 src/controllers/group4/group4
+src/controllers/deuxieme_meth/deuxieme_meth
