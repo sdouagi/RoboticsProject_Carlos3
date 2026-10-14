@@ -3,3 +3,9 @@ build/
 *.d
 src/controllers/group4/group4
 src/controllers/deuxieme_meth/deuxieme_meth
+*.o
+programmes/bin/
+rapport/documentation_code/
+*.aux
+*.log
+*.toc
