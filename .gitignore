@@ -1,0 +1,4 @@
+build/
+*.o
+*.d
+src/controllers/group4/group4
