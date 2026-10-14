@@ -155,6 +155,8 @@ MyRobot::~MyRobot()
 
 void MyRobot::run()
 {
+
+
     const double FORWARD_SPEED  = 4.0;
     const double ROT_SPEED      = 2.5;
     const double WALL_SPEED     = 4.5;
@@ -165,25 +167,34 @@ void MyRobot::run()
 
     if (step(_time_step) == -1) return;
 
-    // Seed odometry from GPS + compass on the very first tick.
-    // GPS is noisy (3 m) but good enough for initial pose; compass gives accurate heading at least 
-    if (_my_gps) {
-        _x = (float)_my_gps->getValues()[2];   
-        _y = (float)_my_gps->getValues()[0];   
-    }
-    _theta = normalize_angle(get_heading_radians());
+    // Initialize pose on startup to the known starting location in the
+    // arena (x=0.0, y=-7.99). Avoid using noisy GPS to set the initial
+    // odometry origin — set previous encoder ticks from sensors so the
+    // first odometry update doesn't produce a large jump.
+    _x = 0.0f;
+    _y = -7.99f;
+    _theta = normalize_angle(get_heading_radians()+ M_PI); 
     _origin_x = _x;
     _origin_y = _y;
+
+    if (_left_wheel_sensor)
+        _prev_left_enc = (float)_left_wheel_sensor->getValue();
+    if (_right_wheel_sensor)
+        _prev_right_enc = (float)_right_wheel_sensor->getValue();
 
     while (step(_time_step) != -1)
     {
         compute_odometry();
-        _theta = normalize_angle(get_heading_radians());
+
+        // Keep the odometry heading driven by wheel encoders.
+        // Re-reading the compass every cycle can desynchronize the pose
+        // integration if the compass frame is not exactly aligned with the
+        // world frame.
 
         // GPS correction every ~5 s — low weight because resolution is 3 m so not worth a lot :(
         bool in_phase2 = (_state >= ID_FACE_FORWARD && _state <= ID_CLASSIFY);
         if (++_gps_timer >= 78) {
-            if (!in_phase2) apply_gps_correction();
+            //if (!in_phase2) apply_gps_correction();
             _gps_timer = 0;
         }
 
@@ -422,7 +433,7 @@ void MyRobot::run()
             double target = _id_scan_heading_target; // right-facing heading
             if (turn_to_heading(target, ID_ROT_SPEED+2.0)) {
                 _id_settle_steps = 0;
-                if (DEBUG_LOG) cout << "Phase2.4d facing right scan heading again (theta=" << _theta << ")" << endl;
+                if (DEBUG_LOG) cout << "Phase 1.6d facing right scan heading again (theta=" << _theta << ")" << endl;
                 _state = ID_RETURN_FROM_RIGHT;
             }
             break;
@@ -576,7 +587,7 @@ void MyRobot::run()
                 _id_front_hit_count = 0;
                 _id_left_center_hit  = false;
                 _id_left_center_front = 0.0;
-                if (DEBUG_LOG) cout << "Phase2.7c Starting forward probe ";
+                if (DEBUG_LOG) cout << "Phase1.9c Starting forward probe ";
                 _state = ID_PROBE_LEFT_CENTER;
             }
             break;
@@ -802,6 +813,29 @@ void MyRobot::run()
         // Phase 2: navigate waypoints and detect victims
         case NAVIGATE_WAYPOINT:
         {
+            double tgt_x = 0.0;
+            double tgt_y = 0.0;
+
+            if (_current_wp >= 0 && _current_wp < (int)_waypoints.size()) {
+                tgt_x = _waypoints[_current_wp].x;
+                tgt_y = _waypoints[_current_wp].y;
+            } else {
+                tgt_x = _origin_x;
+                tgt_y = _origin_y;
+            }
+
+            if (INFO_LOG) {
+                cout << "[Nav] x=" << _x << " y=" << _y << " theta=" << _theta;
+                if (_my_gps) {
+                    const double* gv = _my_gps->getValues();
+                    double gps_x = gv[2];
+                    double gps_y = gv[0];
+                    cout << " | gps_x=" << gps_x << " gps_y=" << gps_y;
+                }
+                cout << " | tgt_x=" << tgt_x << " tgt_y=" << tgt_y;
+                cout << endl;
+            }
+
             if (_ignore_detection_steps > 0)
                 _ignore_detection_steps--;
 
@@ -956,6 +990,22 @@ void MyRobot::run()
                     _current_wp--;
                     break;
                 }
+
+
+                // Make the origin match the reset pose.
+                _origin_x = _x;
+                _origin_y = _y;
+
+                // Reset previous encoder readings to current sensor values to
+                // avoid an immediate large delta when compute_odometry runs.
+                if (_left_wheel_sensor)
+                    _prev_left_enc = (float)_left_wheel_sensor->getValue();
+                if (_right_wheel_sensor)
+                    _prev_right_enc = (float)_right_wheel_sensor->getValue();
+
+                // Re-sync heading from the compass if available.
+                if (_my_compass)
+                    _theta = (float)normalize_angle(get_heading_radians());
 
                 _state = TASK_COMPLETE;
 
@@ -1298,8 +1348,8 @@ void MyRobot::load_waypoints(int world_id)
 
         case 8:
             _waypoints = {
-                { -3.06,  -1.23  },
-                { -3.065, -3.479 },
+                { -1.35,  -6.55  },
+                { -1.28092, -3.25793 },
                 {  0.925, -2.755 },
                 {  8.49,  -2.76  },
                 {  8.49,  -1.51  }
@@ -1362,8 +1412,8 @@ void MyRobot::apply_gps_correction()
 
     const double* vals = _my_gps->getValues();
 
-    double gps_x = vals[2];
-    double gps_y = vals[0];
+    double gps_x = vals[0];
+    double gps_y = vals[2];
 
     double dx = gps_x - _x;
     double dy = gps_y - _y;
@@ -1388,11 +1438,13 @@ void MyRobot::compute_odometry()
     _prev_right_enc = (float)right_enc;
 
     double ds = (dl + dr) / 2.0;
-    double dtheta = (dr - dl) / WHEELS_DISTANCE;
+    
+    // Utilise UNIQUEMENT la compass pour l'angle, pas dtheta
+    double heading = normalize_angle(get_heading_radians());
+    _theta = heading;
 
-    _x += (float)(ds * cos(_theta + dtheta / 2.0));
-    _y += (float)(ds * sin(_theta + dtheta / 2.0));
-    _theta = (float)normalize_angle(_theta + dtheta);
+    _x += (float)(ds * cos(heading));
+    _y += (float)(ds * sin(heading));
 }
 
 // Read heading from the compass.
@@ -1402,7 +1454,7 @@ double MyRobot::get_heading_radians()
         return 0.0;
 
     const double* v = _my_compass->getValues();
-    return atan2(-v[2], -v[0]);
+    return atan2(v[2], v[0]);
 }
 
 // Convert wheel encoder radians to meters.

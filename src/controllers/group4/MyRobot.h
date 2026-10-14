@@ -34,7 +34,7 @@ using namespace webots;
 
 // Compass heading (radians) the robot should face after corner alignment.
 // 0.0 = east in Webots default frame. Adjust to match your world's long axis.
-#define ALIGN_HEADING           0.0
+#define ALIGN_HEADING           0
 
 // Distance sensor trigger levels (raw sensor units)
 #define OBSTACLE_FRONT_THRESH   80.0

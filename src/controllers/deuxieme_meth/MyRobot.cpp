@@ -136,6 +136,12 @@ void MyRobot::run()
     if (_left_wheel_sensor)  _prev_left_enc  = _left_wheel_sensor->getValue();
     if (_right_wheel_sensor) _prev_right_enc = _right_wheel_sensor->getValue();
     cout << "GPS: x=" << _x << " y=" << _y << " θ=" << _theta << endl;
+    if (_my_compass) {
+        const double* v = _my_compass->getValues();
+        cout << "COMPASS_AXES_DEBUG: v[0]=" << v[0] << " v[1]=" << v[1] << " v[2]=" << v[2] << endl;
+        cout << "  atan2(-v[0],v[2])=" << atan2(-v[0],v[2]) << "  (current formula)" << endl;
+        cout << "  Webots robot facing: X=" << (v[0]>0.5?"+":(v[0]<-0.5?"-":"~")) << " Z=" << (v[2]>0.5?"+":(v[2]<-0.5?"-":"~")) << endl;
+    }
 
     while (step(_time_step) != -1)
     {
@@ -199,7 +205,7 @@ void MyRobot::run()
 
         case ID_TURN_RIGHT_FROM_BACK_WALL:
         {
-            if (turn_to_heading(1.49, 0.7)) {
+            if (turn_to_heading(0.0, 0.7)) {
                 cout << "[CALIB] right turn done. Drive to left corner." << endl;
                 _corner_wall_seen = false;
                 _corner_push_steps = 0;
@@ -247,7 +253,7 @@ void MyRobot::run()
             // Force odometry at the known corner. Do not trust odometry before this point.
             _y = 4.4;
             _x = -9.43;
-            _theta = -M_PI / 2.0;  // orientation vers le mur/coin après calibration
+            _theta = 0.0;  // orientation vers le mur/coin après calibration
             _id_forward_heading = _theta;
 
             cout << "[ODOM_RESET_RIGHT_CORNER] x=" << _x
@@ -529,21 +535,31 @@ void MyRobot::apply_gps_correction()
 
 void MyRobot::compute_odometry()
 {
-    double left_enc  = _left_wheel_sensor  ? _left_wheel_sensor->getValue()  : 0.0;
-    double right_enc = _right_wheel_sensor ? _right_wheel_sensor->getValue() : 0.0;
+    if (!_left_wheel_sensor || !_right_wheel_sensor) {
+        return;
+    }
 
-    double dl = encoder_tics_to_meters((float)(left_enc  - _prev_left_enc));
-    double dr = encoder_tics_to_meters((float)(right_enc - _prev_right_enc));
+    const float left_enc = _left_wheel_sensor->getValue();
+    const float right_enc = _right_wheel_sensor->getValue();
 
-    _prev_left_enc  = (float)left_enc;
-    _prev_right_enc = (float)right_enc;
+    const float diff_sl = encoder_tics_to_meters(left_enc - _prev_left_enc);
+    const float diff_sr = encoder_tics_to_meters(right_enc - _prev_right_enc);
 
-    double ds     = (dl + dr) / 2.0;
-    double dtheta = (dr - dl) / WHEELS_DISTANCE;
+    _prev_left_enc = left_enc;
+    _prev_right_enc = right_enc;
 
-    _x     += (float)(ds * cos(_theta + dtheta / 2.0));
-    _y     += (float)(ds * sin(_theta + dtheta / 2.0));
-    _theta  = (float)normalize_angle(_theta + dtheta);
+    const float delta_s = (diff_sr + diff_sl) / 2.0f;
+    const float delta_theta = (diff_sr - diff_sl) / WHEELS_DISTANCE;
+    const double heading = _theta + (delta_theta / 2.0);
+
+    _x += delta_s * cos(heading);
+    _y += delta_s * sin(heading);
+
+    if (_my_compass) {
+        _theta = normalize_angle(get_heading_radians());
+    } else {
+        _theta = normalize_angle(_theta + delta_theta);
+    }
 }
 
 //////////////////////////////////////////////
@@ -551,14 +567,14 @@ void MyRobot::compute_odometry()
 double MyRobot::get_heading_radians()
 {
     const double* v = _my_compass->getValues();
-    return atan2(-v[2], -v[0]);
+    return atan2(-v[0], v[2]);
 }
 
 //////////////////////////////////////////////
 
 float MyRobot::encoder_tics_to_meters(float tics)
 {
-    return tics / ENCODER_TICS_PER_RADIAN * WHEEL_RADIUS;
+    return tics / ENCODER_TICS_PER_RADIAN * WHEEL_RADIUS * ODOM_LINEAR_SCALE;
 }
 
 //////////////////////////////////////////////
@@ -603,7 +619,7 @@ bool MyRobot::turn_to_heading(double target, double max_speed)
     }
 
     if (error < 0.0) {
-        // Need to decrease theta.
+        // Need to decrease theta → turn right physically
         set_speed(speed, -speed);
         cout << "[turn_to_heading] TURN NEG target=" << target
             << " theta=" << _theta
@@ -611,7 +627,7 @@ bool MyRobot::turn_to_heading(double target, double max_speed)
             << " L=" << speed
             << " R=" << -speed << endl;
     } else {
-        // Need to increase theta.
+        // Need to increase theta → turn left physically
         set_speed(-speed, speed);
         cout << "[turn_to_heading] TURN POS target=" << target
             << " theta=" << _theta
@@ -1041,7 +1057,7 @@ bool MyRobot::go_to_point(double gx, double gy)
     double target_angle = atan2(gy - _y, gx - _x);
     double angle_error = normalize_angle(target_angle - _theta);
 
-    const double TARGET_REACHED = 0.10;
+    const double TARGET_REACHED = 0.03;
 
     const double FRONT_DETECT = 700.0;
     const double FRONT_HARD   = 1000.0;
