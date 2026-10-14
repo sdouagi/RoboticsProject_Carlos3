@@ -19,3 +19,4 @@ javac.*.args
 *.out
 *.synctex.gz
 .nfs*
+.ipynb_checkpoints/
